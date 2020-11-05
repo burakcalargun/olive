@@ -1,4 +1,0 @@
----- stepping Matches (3 in 3 files) ----
-Interrupts.c (ata\controller):   stepping();
-Trk_main.c (turkuaz\main):void stepping(void)
-Trk_main.h (turkuaz\main):extern void stepping(void);
