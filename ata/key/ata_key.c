@@ -9,62 +9,47 @@
 unsigned char pressedKey = NULLKEY;
 unsigned char letNewPress = 0;
 trk_KeyCallbackFunct ata_keycallback;
-
+unsigned char keyPressCounter = 0;
 void ata_KeyOpen(trk_KeyCallbackFunct keycallback)
 {
     ata_keycallback = keycallback;
 }
 
-void ata_KeyHandleFromRemote(unsigned short function)
-{
-    if(function == 0x0C)
-    {
-        ata_keycallback(POWERBUTTONREMOTE,TRUE,KEYFROMREMOTE);
-    }
-    else if(function == 0x30)
-    {
-        ata_keycallback(REMOTELEVELDOWNKEY,TRUE,KEYFROMREMOTE);
-    }
-    else if(function == 0xC0)
-    {
-        ata_keycallback(REMOTELEVELUPKEY,TRUE,KEYFROMREMOTE);
-    }
-}
-
+unsigned char pressState = FALSE;
+unsigned char previousPressState = FALSE;
+unsigned char longPressWasActive = FALSE;
 unsigned long ata_KeyCheckThread(void)
 {
-    unsigned char isAnyKeyPressed = TRUE;
-    
-    if(GPIO_ReadInputPin(GPIOD, GPIO_PIN_3) != 0)
+    unsigned char isAnyKeyPressed = FALSE;
+
+    pressState = GPIO_ReadInputPin(GPIOC, GPIO_PIN_7) ? (FALSE) : (TRUE);
+
+    if((previousPressState == TRUE) && (pressState == FALSE))
     {
-        pressedKey = LEVELDOWNKEY;
+        if(longPressWasActive == FALSE)
+        {
+            pressedKey = POWERBUTTON;
+            isAnyKeyPressed = TRUE;
+        }
+        else
+        {
+            longPressWasActive = FALSE;
+        }
     }
-    else if(GPIO_ReadInputPin(GPIOD, GPIO_PIN_2) != 0)
+    else if((pressState == TRUE) && (++keyPressCounter > 50))
     {
-        pressedKey = LEVELUPKEY;
-    }
-    else
-    {
-        isAnyKeyPressed = FALSE;
+        pressedKey = LEVELBUTTON;
+        isAnyKeyPressed = TRUE;
+        longPressWasActive = TRUE;
     }
 
     if(isAnyKeyPressed == TRUE)
     {
-        if(letNewPress == TRUE)
-        {
-            ata_keycallback(pressedKey,TRUE,KEYFROMBUTTON);
-            letNewPress = FALSE;
-
-            return msg_ProcessAfter1ms*250;
-        }
-    }
-    else
-    {
-        letNewPress = TRUE;
+        keyPressCounter = 0;
+        ata_keycallback(pressedKey,TRUE);
     }
 
-    ata_keycallback(LEVELUPKEY,FALSE,KEYFROMBUTTON);
-    ata_keycallback(LEVELDOWNKEY,FALSE,KEYFROMBUTTON);
+    previousPressState = pressState;
 
     return msg_ProcessAfter1ms*50;
 }
@@ -72,7 +57,7 @@ unsigned long ata_KeyCheckThread(void)
 void ata_KeyInit(void)
 {
     #if(KEY_CHECK_METHOD == KEY_POLLING)
-    msg_pushcallback(&ata_KeyCheckThread,	msg_ProcessAfter1ms);
+    msg_pushcallback(&ata_KeyCheckThread, msg_ProcessAfter1s);
     #endif
 }
 

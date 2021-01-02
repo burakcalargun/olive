@@ -7,110 +7,165 @@
 #include "trk_message.h"
 #include "trk_misc.h"
 #include "trk_app.h"
+#include "ata_controller.h"
 
 
+unsigned short mainTimerLoad = MAINTIMER;
+unsigned short lowSideLoad = 256;
+unsigned short lowSideCount = 38;
 
-#define		TIM1_DIV1			(unsigned short)(1-1)
-#define		TIM1_DIV2			(unsigned short)(2-1)
-#define		TIM1_DIV4			(unsigned short)(4-1)
-#define		TIM1_DIV8			(unsigned short)(8-1)
-#define		TIM1_DIV16			(unsigned short)(16-1)
-#define		TIM1_DIV32			(unsigned short)(32-1)
- 
-// timer1 PWM output pin to enable
+unsigned char bldc_step = 0;
+unsigned char flagClosedLoop = FALSE;
+unsigned short rawSpeed = 0;
 
- 
- // PWM frequency setting
-#define	V_PWMFRE  1000
- 
-#define ToCMPxH(CMP,Value) (CMP = (unsigned char)((Value >> 8 ) & 0xFF))
-#define ToCMPxL(CMP,Value) (CMP = (unsigned char)(Value & 0xFF))
- 
- 
-//*************************************
- // function name: Init_Timer1_PWM
- // Function: initializing a timer for generating a PWM output
- // entry parameters: PWM Level 0.625U (1000 * 0.625 = 62.5U = 8K) each stage
- // export parameters: None
- // this initialization settings in the three-phase PWM BLDC output
-//***************************************
-void Init_Timer1_PWM(unsigned short Tcon,unsigned short Pscr)
-{	
-   
-   #if 0
-   // 16M via System Clock Prescaler f = fck / (PSCR + 1)  
+unsigned short countUsedAsSpeed = 40;
+unsigned short countSpeedLimit = 197;
+unsigned short totalSpeed = 0;
+unsigned char speedCounter = 0;
+unsigned short calculatedSpeed = 500;
+unsigned short setSpeed = LEVEL2;
 
-   TIM1->PSCRH = (Pscr >> 8) & 0xff ;  
-   TIM1->PSCRL = Pscr & 0xff ; 
+unsigned char interruptFunctionAvailable = FALSE;
 
-   // the value setting register reload, 255 is a maximum value			
-   TIM1->ARRH = (Tcon >> 8) & 0xff ;
-   TIM1->ARRL = Tcon & 0xff ;
+unsigned short phaseLossCounter = 0;
+unsigned char phaseIsLost = FALSE;
 
-   // set the brakes register 		
-   TIM1->BKR |= 0X80 ;   
+unsigned char motorState = FALSE;
 
-   // PWM1 mode, TIM1_CNT <TIM1_CCR1 valid		
-   TIM1->CCMR1 = 0x78 ; 
-   // PWM1 mode, TIM1_CNT <TIM1_CCR1 valid		
-   TIM1->CCMR2 = 0x78 ; 
-   // PWM1 mode, TIM1_CNT <TIM1_CCR1 valid		
-   TIM1->CCMR3 = 0x78 ; 
-   // freeze mode, TIM1_CNT <TIM1_CCR1 valid		
-   TIM1->CCMR4 = 0x08 ; 
+void bldc_move(void)
+{
+   phaseLossCounter = 0;
+   rawSpeed = TIM1_Get() / 10;
+   TIM1->CNTRH = 0;
+   TIM1->CNTRL = 0;
+   switch(bldc_step)
+   {  
+      case 0:
+         drive_AB();
+         BEMF_C_FALLING();
+         break;
 
-   TIM1->CCER1 = 0x00;  // Disable the Channels 1-2
-   TIM1->CCER1 = 0x17;  // Enable the Channel 1-2 & Low Polarity
+      case 1:
+         drive_AC();
+         BEMF_B_RISING();
+         break;
+         
+      case 2:
+         drive_BC();
+         BEMF_A_FALLING();
+         break;
 
-   TIM1->CCER2 = 0x00;  // Disable the Channels 3
-   TIM1->CCER2 = 0x03;  // Enable the Channel 3 & Low Polarity
+      case 3:
+         drive_BA();
+         BEMF_C_RISING();
+         break;
 
-   // PWM duty cycle is cleared
-   TIM1->CCR1H = (unsigned char)(333 >> 8); 
-   TIM1->CCR1L = (unsigned char)333;    
+      case 4:
+         drive_CA();
+         BEMF_B_FALLING();
+         break;
 
-   TIM1->CCR2H = (unsigned char)(333 >> 8); 
-   TIM1->CCR2L = (unsigned char)333;
+      case 5:
+         drive_CB();
+         BEMF_A_RISING();
+         break;
+   }  
 
-   TIM1->CCR3H = (unsigned char)(333 >> 8); 
-   TIM1->CCR3L = (unsigned char)333;
-
-   TIM1->EGR = 0X01; // UG = 1; Loading initializes the counter preload shadow registers
-   TIM1->CNTRH = 0; // Counter Cleared
-   TIM1->CNTRL = 0 ;
-
-   TIM1->CR1 |= 0x80;
-   TIM1->CR1 |= 0X01; // counter enable, start counting 	
-   #else
-			
-			
-   #endif
-				
+   bldc_step++;
+   if(bldc_step >= 6)
+   {
+      bldc_step = 0;
+   }
 }
 
+void interruptFunction(void)
+{
+   unsigned char j;
 
+   if(interruptFunctionAvailable == TRUE)
+   {
+       // BEMF debounce
+       for(j = 0; j < 20; j++) {
+         if(bldc_step & 1) 
+         {
+            if(bldc_step == 1)
+            {
+                if(GPIO_ReadInputPin(GPIOB, GPIO_PIN_1) == GPIO_PIN_1)
+                {
+                    j -= DEBOUNCE_ITERATOR;
+                }
+            }
+            if(bldc_step == 3)
+            {
+                if(GPIO_ReadInputPin(GPIOB, GPIO_PIN_0) == GPIO_PIN_0)
+                {
+                    j -= DEBOUNCE_ITERATOR;
+                }
+            }
+            if(bldc_step == 5)
+            {
+                if(GPIO_ReadInputPin(GPIOB, GPIO_PIN_2) == GPIO_PIN_2)
+                {
+                    j -= DEBOUNCE_ITERATOR;
+                }
+            }
+         }
+         else 
+         {
+             if(bldc_step == 0)
+             {
+                 if(GPIO_ReadInputPin(GPIOB, GPIO_PIN_0) == 0)
+                 {
+                     j -= DEBOUNCE_ITERATOR;
+                 }
+             }
+             if(bldc_step == 2)
+             {
+                 if(GPIO_ReadInputPin(GPIOB, GPIO_PIN_2) == 0)
+                 {
+                     j -= DEBOUNCE_ITERATOR;
+                 }
+             }
+             if(bldc_step == 4)
+             {
+                 if(GPIO_ReadInputPin(GPIOB, GPIO_PIN_1) == 0)
+                 {
+                     j -= DEBOUNCE_ITERATOR;
+                 }
+             }
+         }
+       }
 
+       bldc_move();
+   }
+}
+
+void drive_AB(void)
+{
+   GPIO_WriteHigh(GPIOC, GPIO_PIN_1);
+   GPIO_WriteLow(GPIOC, GPIO_PIN_2);
+   GPIO_WriteLow(GPIOC, GPIO_PIN_3);
+}
+
+void drive_AC(void)
+{
+   GPIO_WriteHigh(GPIOC, GPIO_PIN_1);
+   GPIO_WriteLow(GPIOC, GPIO_PIN_2);
+   GPIO_WriteLow(GPIOC, GPIO_PIN_3);
+
+   TIM2->CCER1 = 0x00;  // Disable the Channels 1-2
+   TIM2->CCER2 = 0x00;  // Disable the Channels 3
+   GPIO_WriteLow(GPIOD, GPIO_PIN_4);
+   GPIO_WriteLow(GPIOD, GPIO_PIN_3);
+   GPIO_WriteLow(GPIOA, GPIO_PIN_3);
+   TIM2->CCER2 = 0x03;  // Enable the Channel 3 & Low Polarity
+}
 
 void drive_BC(void)
 {
    GPIO_WriteLow(GPIOC, GPIO_PIN_1);
    GPIO_WriteHigh(GPIOC, GPIO_PIN_2);
    GPIO_WriteLow(GPIOC, GPIO_PIN_3);
-
-   #if 0
-   #if 0
-   GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-   GPIO_WriteLow(GPIOD, GPIO_PIN_3);
-   GPIO_WriteHigh(GPIOA, GPIO_PIN_3);
-   #else
-   TIM2->CCER1 = 0x00;  // Disable the Channels 1-2
-   TIM2->CCER2 = 0x00;  // Disable the Channels 3
-   GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-   GPIO_WriteLow(GPIOD, GPIO_PIN_3);
-   GPIO_WriteLow(GPIOA, GPIO_PIN_3);
-   TIM2->CCER2 = 0x01;  // Enable the Channel 3 & Low Polarity
-   #endif
-   #endif
 }
 
 void drive_BA(void)
@@ -119,18 +174,12 @@ void drive_BA(void)
    GPIO_WriteHigh(GPIOC, GPIO_PIN_2);
    GPIO_WriteLow(GPIOC, GPIO_PIN_3);
 
-   #if 0
-   GPIO_WriteHigh(GPIOD, GPIO_PIN_4);
-   GPIO_WriteLow(GPIOD, GPIO_PIN_3);
-   GPIO_WriteLow(GPIOA, GPIO_PIN_3);
-   #else
    TIM2->CCER1 = 0x00;  // Disable the Channels 1-2
    TIM2->CCER2 = 0x00;  // Disable the Channels 3
    GPIO_WriteLow(GPIOD, GPIO_PIN_4);
    GPIO_WriteLow(GPIOD, GPIO_PIN_3);
    GPIO_WriteLow(GPIOA, GPIO_PIN_3);
-   TIM2->CCER1 = 0x01;  // Enable the Channel 1 & Low Polarity
-   #endif
+   TIM2->CCER1 = 0x03;  // Enable the Channel 1 & Low Polarity
 }
 
 void drive_CA(void)
@@ -138,21 +187,6 @@ void drive_CA(void)
    GPIO_WriteLow(GPIOC, GPIO_PIN_1);
    GPIO_WriteLow(GPIOC, GPIO_PIN_2);
    GPIO_WriteHigh(GPIOC, GPIO_PIN_3);
-
-   #if 0
-   #if 0
-   GPIO_WriteHigh(GPIOD, GPIO_PIN_4);
-   GPIO_WriteLow(GPIOD, GPIO_PIN_3);
-   GPIO_WriteLow(GPIOA, GPIO_PIN_3);
-   #else
-   TIM2->CCER1 = 0x00;  // Disable the Channels 1-2
-   TIM2->CCER2 = 0x00;  // Disable the Channels 3
-   GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-   GPIO_WriteLow(GPIOD, GPIO_PIN_3);
-   GPIO_WriteLow(GPIOA, GPIO_PIN_3);
-   TIM2->CCER1 = 0x01;  // Enable the Channel 1 & Low Polarity
-   #endif
-   #endif
 }
 
 void drive_CB(void)
@@ -161,140 +195,70 @@ void drive_CB(void)
    GPIO_WriteLow(GPIOC, GPIO_PIN_2);
    GPIO_WriteHigh(GPIOC, GPIO_PIN_3);
    
-   #if 0
-   GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-   GPIO_WriteHigh(GPIOD, GPIO_PIN_3);
-   GPIO_WriteLow(GPIOA, GPIO_PIN_3);
-   #else
    TIM2->CCER1 = 0x00;  // Disable the Channels 1-2
    TIM2->CCER2 = 0x00;  // Disable the Channels 3
    GPIO_WriteLow(GPIOD, GPIO_PIN_4);
    GPIO_WriteLow(GPIOD, GPIO_PIN_3);
    GPIO_WriteLow(GPIOA, GPIO_PIN_3);
-   TIM2->CCER1 = 0x10;  // Enable the Channel 2 & Low Polarity
-   #endif
+   TIM2->CCER1 = 0x30;  // Enable the Channel 2 & Low Polarity
 }
 
-void drive_AB(void)
+void BEMF_A_RISING(void) //(U) _ B2 pin
 {
-   GPIO_WriteHigh(GPIOC, GPIO_PIN_1);
-   GPIO_WriteLow(GPIOC, GPIO_PIN_2);
-   GPIO_WriteLow(GPIOC, GPIO_PIN_3);
-
-   #if 0
-   #if 0
-   GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-   GPIO_WriteHigh(GPIOD, GPIO_PIN_3);
-   GPIO_WriteLow(GPIOA, GPIO_PIN_3);
-   #else
-   TIM2->CCER1 = 0x00;  // Disable the Channels 1-2
-   TIM2->CCER2 = 0x00;  // Disable the Channels 3
-   GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-   GPIO_WriteLow(GPIOD, GPIO_PIN_3);
-   GPIO_WriteLow(GPIOA, GPIO_PIN_3);
-   TIM2->CCER1 = 0x10;  // Enable the Channel 2 & Low Polarity
-   #endif
-   #endif
+  GPIO_Init(GPIOB, GPIO_PIN_2, GPIO_MODE_IN_PU_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_1, GPIO_MODE_IN_PU_NO_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_0, GPIO_MODE_IN_PU_NO_IT);
+  EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOB, EXTI_SENSITIVITY_RISE_ONLY);
 }
-
-void drive_AC(void)
+void BEMF_A_FALLING(void) //(U) _ B2 pin
 {
-   GPIO_WriteHigh(GPIOC, GPIO_PIN_1);
-   GPIO_WriteLow(GPIOC, GPIO_PIN_2);
-   GPIO_WriteLow(GPIOC, GPIO_PIN_3);
-   
-   #if 0
-   GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-   GPIO_WriteLow(GPIOD, GPIO_PIN_3);
-   GPIO_WriteHigh(GPIOA, GPIO_PIN_3);
-   #else
-   TIM2->CCER1 = 0x00;  // Disable the Channels 1-2
-   TIM2->CCER2 = 0x00;  // Disable the Channels 3
-   GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-   GPIO_WriteLow(GPIOD, GPIO_PIN_3);
-   GPIO_WriteLow(GPIOA, GPIO_PIN_3);
-   TIM2->CCER2 = 0x01;  // Enable the Channel 3 & Low Polarity
-   #endif
+  GPIO_Init(GPIOB, GPIO_PIN_2, GPIO_MODE_IN_PU_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_1, GPIO_MODE_IN_PU_NO_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_0, GPIO_MODE_IN_PU_NO_IT);
+  EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOB, EXTI_SENSITIVITY_FALL_ONLY);
 }
-
-void drive_Allign(void)
+void BEMF_B_RISING(void) //(V) _ B1 pin
 {
-   drive_BA();
+  GPIO_Init(GPIOB, GPIO_PIN_2, GPIO_MODE_IN_PU_NO_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_1, GPIO_MODE_IN_PU_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_0, GPIO_MODE_IN_PU_NO_IT);
+  EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOB, EXTI_SENSITIVITY_RISE_ONLY);
 }
-
-void drive_AllignStep2(void)
+void BEMF_B_FALLING(void) //(V) _ B1 pin
 {
-   drive_CA();
+  GPIO_Init(GPIOB, GPIO_PIN_2, GPIO_MODE_IN_PU_NO_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_1, GPIO_MODE_IN_PU_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_0, GPIO_MODE_IN_PU_NO_IT);
+  EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOB, EXTI_SENSITIVITY_FALL_ONLY);
 }
-
-unsigned char commutationSteps = step_CB;
-unsigned char allignmentCounter = 0;
-unsigned char allignmentPhase = 1;
-
-unsigned char testState = 0;
-
-void stepping(void)
+void BEMF_C_RISING(void) //(W) _ B0 pin
 {
-   if(testState == 2)
-   {
-      switch(commutationSteps)
-      {
-         case step_BC:
-            drive_BC();
-            commutationSteps = step_BA;
-            break;
-
-         case step_BA:
-            drive_BA();
-            commutationSteps = step_CA;
-            break;
-
-         case step_CA:
-            drive_CA();
-            commutationSteps = step_CB;
-            break;
-
-         case step_CB:
-            drive_CB();
-            commutationSteps = step_AB;
-            break;
-            
-         case step_AB:
-            drive_AB();
-            commutationSteps = step_AC;
-            break;
-
-         case step_AC:
-            drive_AC();
-            commutationSteps = step_BC;
-            break;
-      }
-   }
+  GPIO_Init(GPIOB, GPIO_PIN_2, GPIO_MODE_IN_PU_NO_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_1, GPIO_MODE_IN_PU_NO_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_0, GPIO_MODE_IN_PU_IT);
+  EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOB, EXTI_SENSITIVITY_RISE_ONLY);
 }
-
-
-unsigned long testThread(void)
+void BEMF_C_FALLING(void) //(W) _ B0 pin
 {
-   if(testState == 0)
-   {
-      drive_AllignStep2();
-      testState = 1;
-      GPIO_WriteHigh(GPIOB, GPIO_PIN_7);
-   }
-   else
-   {
-      GPIO_WriteLow(GPIOB, GPIO_PIN_7);
-      testState = 2;
-      return msg_ProcessStopped;
-   }
-   return msg_ProcessAfter1s;
+  GPIO_Init(GPIOB, GPIO_PIN_2, GPIO_MODE_IN_PU_NO_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_1, GPIO_MODE_IN_PU_NO_IT);
+  GPIO_Init(GPIOB, GPIO_PIN_0, GPIO_MODE_IN_PU_IT);
+  EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOB, EXTI_SENSITIVITY_FALL_ONLY);
 }
 
-#define MAINTIMER 20000
+unsigned short TIM1_Get(void)
+{
+    return ( ((unsigned short)TIM1->CNTRH << 8) + (unsigned short)TIM1->CNTRL );
+}
 
-unsigned short mainTimerLoad = MAINTIMER;
-unsigned short lowSideLoad = MAINTIMER / 20;
-unsigned short lowSideDuty = 15;
+void TIM1_Set(unsigned short ms)
+{
+    unsigned char pscr = 5;
+    unsigned short cntr = 25*ms;
+    
+    TIM1->ARRH = cntr >> 8;    // auto reload value is 2000              
+    TIM1->ARRL = cntr;                    //default value is 8ms
+}
 
 /*timer 1 is the main timer*/
 void TIM1_Settings(void)
@@ -309,7 +273,6 @@ void TIM1_Settings(void)
    TIM1->CR1 = 0x05;                    
 }
 
-
 void setLowSideLoad(unsigned short load)
 {
    lowSideLoad = load;
@@ -320,27 +283,29 @@ unsigned short getLowSideLoad(void)
    return lowSideLoad;
 }
 
-void setLowSideDuty(unsigned short duty)
+unsigned short getLowSideCount(void)
 {
-   lowSideDuty = duty;
+    return lowSideCount;
 }
 
-unsigned short getLowSideDuty(void)
+void setLowSideCount(unsigned short count)
 {
-   return lowSideDuty;
-}
+    lowSideCount = count;
+    
+    TIM2->CCR1H = (unsigned char)(lowSideCount >> 8); 
+    TIM2->CCR1L = (unsigned char)lowSideCount;    
 
-unsigned short getResult(void)
-{   
-   return lowSideLoad - ((lowSideLoad*lowSideDuty) / 100);
+    TIM2->CCR2H = (unsigned char)(lowSideCount >> 8); 
+    TIM2->CCR2L = (unsigned char)lowSideCount;
+
+    TIM2->CCR3H = (unsigned char)(lowSideCount >> 8); 
+    TIM2->CCR3L = (unsigned char)lowSideCount;
 }
 
 /*timer 2 is the pwm timer for low side switching*/
-void Init_Timer2(unsigned short load, unsigned short duty) 
-{
-   unsigned short loadduty = load - ((load * duty) / 100);
-   
-	TIM2->PSCR = 0x00;//0x03;    
+void Init_Timer2(unsigned short load, unsigned short count) 
+{   
+   TIM2->PSCR = 0x00;//0x03;    
    TIM2->ARRH = (unsigned char)(load >> 8); 
    TIM2->ARRL = (unsigned char)load;   
  
@@ -354,31 +319,277 @@ void Init_Timer2(unsigned short load, unsigned short duty)
    TIM2->CCMR2 = 0x78;  // PWM Mode2(CH2) - Preload  Enabled
    TIM2->CCMR3 = 0x78;  // PWM Mode2(CH3) - Preload  Enabled
  
-   TIM2->CCR1H = (unsigned char)(loadduty >> 8); 
-   TIM2->CCR1L = (unsigned char)loadduty;    
+   TIM2->CCR1H = (unsigned char)(count >> 8); 
+   TIM2->CCR1L = (unsigned char)count;    
  
-   TIM2->CCR2H = (unsigned char)(loadduty >> 8); 
-   TIM2->CCR2L = (unsigned char)loadduty;
+   TIM2->CCR2H = (unsigned char)(count >> 8); 
+   TIM2->CCR2L = (unsigned char)count;
  
-   TIM2->CCR3H = (unsigned char)(loadduty >> 8); 
-   TIM2->CCR3L = (unsigned char)loadduty;
+   TIM2->CCR3H = (unsigned char)(count >> 8); 
+   TIM2->CCR3L = (unsigned char)count;
  
    TIM2->CR1  |= 0x80;  // AutoReload aktif durumda.
    TIM2->CR1  |= 0x01;  // Timer çalýþmaya baþlýyor.
 
 }
 
+void delay_us(unsigned short x)
+{
+    unsigned short i;
+    for(i = 0; i < x; i++){}
+}
+
+unsigned long calculateSpeedThread(void)
+{
+    totalSpeed += rawSpeed;
+    speedCounter++;
+
+    if(speedCounter >= 32)
+    {
+        speedCounter = 0;
+        calculatedSpeed = totalSpeed >> 5;
+        totalSpeed = 0;
+    }
+    return msg_ProcessAfter1ms*5;
+}
+
+unsigned short getTargetSpeed(void)
+{
+    return setSpeed;
+}
+
+void setTargetSpeed(unsigned short set)
+{
+    setSpeed = set;
+
+    if(setSpeed == LEVEL1)
+    {
+        setCountLimit(160);
+    }
+    else
+    {
+        setCountLimit(190);
+    }
+}
+
+void setCountLimit(unsigned short set)
+{
+    countSpeedLimit = set;
+}
+
+unsigned long closedLoopPhase(void)
+{
+    if(flagClosedLoop == FALSE)
+    {
+        return msg_ProcessAfter1s;
+    }
+
+    if(countUsedAsSpeed < countSpeedLimit)
+    {
+        countUsedAsSpeed++;
+    }
+    else if(countUsedAsSpeed > countSpeedLimit)
+    {
+        countUsedAsSpeed--;
+    }
+    setLowSideCount(countUsedAsSpeed);
+    return msg_ProcessAfter1ms*15;
+}
+
+#if(MOTOR_TYPE == ORIGINAL_MOTOR)
+#define START_COUNT (2500)
+#define FINISH_COUNT (650)
+#define ITERATOR (35)
+
+void openLoopPhase(void)
+{
+    unsigned short count = START_COUNT;
+    unsigned short j;
+
+    Init_Timer2(getLowSideLoad(), getLowSideCount());
+
+    ata_SetInterruptStatus(DisableAllInterrupts);
+    // Motor start
+    for(j = 0; j < 100; j++)
+    {
+        delay_us(1000); 
+    }
+
+    while(count > FINISH_COUNT) 
+    {
+        delay_us(count);    
+        bldc_move();
+        if(count > 700)
+        {
+            count -= ITERATOR;
+        }
+        else
+        {
+            count--;
+        }
+    }
+    
+    interruptFunctionAvailable = TRUE;
+    ata_SetInterruptStatus(EnableAllInterrupts);
+    flagClosedLoop = TRUE;
+
+}
+#else if(MOTOR_TYPE == MY_TEST_MOTOR)
+#define START_COUNT (5000)
+#define FINISH_COUNT (1200)
+#define ITERATOR (25)
+
+void openLoopPhase(void)
+{
+    unsigned short count = START_COUNT;
+    unsigned short j;
+
+    Init_Timer2(getLowSideLoad(), getLowSideCount());
+
+    ata_SetInterruptStatus(DisableAllInterrupts);
+    // Motor start
+    for(j = 0; j < 100; j++)
+    {
+        delay_us(1000); 
+    }
+
+    while(count > FINISH_COUNT) 
+    {
+        delay_us(count);    
+        bldc_move();
+        count -= ITERATOR;
+    }
+    
+    interruptFunctionAvailable = TRUE;
+    ata_SetInterruptStatus(EnableAllInterrupts);
+    flagClosedLoop = TRUE;
+
+}
+#endif
+
+unsigned char initState = 0;
+unsigned long initThread(void)
+{
+    switch(initState)
+    {
+        case 0:
+            GPIO_WriteLow(GPIOB, GPIO_PIN_6);
+            GPIO_WriteHigh(GPIOB, GPIO_PIN_7);
+            TIM2->ARRH = (unsigned char)(0X30);
+            TIM2->ARRL = (unsigned char)0XD0; 
+            GPIO_WriteHigh(GPIOC, GPIO_PIN_3);
+            TIM2->CCR2H = (unsigned char)(0X01); //Duty High 0x01 
+            TIM2->CCR2L = (unsigned char) (0x0A); // Duty Low 0x50
+            TIM2->CCER1=0x30;
+
+            initState = 1;
+            return msg_ProcessAfter1ms*300;
+            break;
+
+        case 1:
+            TIM2->CCER1=0x00;
+            initState = 2;
+            return msg_ProcessAfter1ms*100;
+            break;
+
+        case 2:
+            TIM2->ARRH = (unsigned char)(0X10); 
+            TIM2->ARRL = (unsigned char)0XD0; 
+            TIM2->CCR2H = (unsigned char)(0X01); //Duty High 0x01 
+            TIM2->CCR2L = (unsigned char) (0x0A); // Duty Low 0x50
+            TIM2->CCER1=0x30;
+            initState = 3;
+            return msg_ProcessAfter1ms*100;
+            break;
+
+        case 3:
+            TIM2->CCER1=0x00;
+            initState = 4;
+            return msg_ProcessAfter1ms*100;
+            break;
+
+        case 4:
+            TIM2->CCER1=0x30;
+            initState = 5;
+            return msg_ProcessAfter1ms*100;
+            break;
+
+        case 5:
+            TIM2->CCER1=0x00;
+            initState = 6;
+            return msg_ProcessAfter1ms*100;
+            break;
+
+        case 6:
+            openLoopPhase();
+            
+            trk_PushMessage(&calculateSpeedThread, msg_ProcessAfter1ms);
+            trk_PushMessage(&closedLoopPhase, msg_ProcessAfter1ms);
+            
+            initState = 7;
+            return msg_ProcessStopped;
+            break;
+            
+        default:
+            //openLoopPhase();
+            break;
+    }
+
+    return msg_ProcessStopped;
+}
+
+unsigned char getMotorState(void)
+{
+    return motorState;
+}
+
+void startStopMotor(unsigned char startstop)
+{
+    motorState = startstop;
+    if(startstop)
+    {
+        totalSpeed = 0;
+        speedCounter = 0;
+        calculatedSpeed = LEVEL2;
+        lowSideLoad = 256;
+        lowSideCount = 43;
+        countUsedAsSpeed = 40;
+        phaseIsLost = FALSE;
+        setTargetSpeed(LEVEL2);
+
+        #if 0
+        openLoopPhase();
+        
+        trk_PushMessage(&calculateSpeedThread, msg_ProcessAfter1ms);
+        trk_PushMessage(&closedLoopPhase, msg_ProcessAfter1ms);
+
+        #else
+        initState = 0;
+        trk_PushMessage(&initThread,msg_ProcessAfter1ms);
+        #endif
+    }
+    else
+    {
+        interruptFunctionAvailable = FALSE;
+        GPIO_WriteLow(GPIOC, GPIO_PIN_1);
+        GPIO_WriteLow(GPIOC, GPIO_PIN_2);
+        GPIO_WriteLow(GPIOC, GPIO_PIN_3);
+        TIM2->CCER1=0x00;
+        TIM2->CCER2=0x00;
+        flagClosedLoop = FALSE;
+
+        trk_StopMessage(&closedLoopPhase);
+        trk_StopMessage(&calculateSpeedThread);
+    } 
+}
+
 void main(void)
 {
-   InitRegisters();
-   trk_MessageInit();
-   ata_Init();
-   trk_appInit();
-   //Init_Timer1_PWM (V_PWMFRE, TIM1_DIV4);
-   TIM1_Settings();
-   Init_Timer2(getLowSideLoad(), getLowSideDuty());
-   drive_Allign();
-   trk_PushMessage(&testThread,msg_ProcessAfter1s);
-   ata_Run();
+    InitRegisters();
+    trk_MessageInit();
+    ata_Init();
+    trk_appInit();
+    TIM1_Settings();
+    ata_Run();
 }
 

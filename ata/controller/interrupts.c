@@ -22,8 +22,18 @@ NEAR unsigned char power_on_button_pressed  = FALSE;
 
 @interrupt void TIM4_UPD_OVF_IRQHandler(void)           //wil occur every 2 mili-seconds
 {
-   ata_TimerFlag++;
-   TIM4->SR1 &= 0xFE;          //clear UIF flag first.
+    ata_TimerFlag++;
+
+    if(interruptFunctionAvailable == TRUE)
+    {
+        if(++phaseLossCounter >= 250)
+        {
+            phaseIsLost = TRUE;
+            startStopMotor(FALSE);
+            phaseLossCounter = 0;
+        }
+    }
+    TIM4->SR1 &= 0xFE;          //clear UIF flag first.
 }
 
 @interrupt void UART1_TX_IRQHandler(void)
@@ -34,40 +44,25 @@ NEAR unsigned char power_on_button_pressed  = FALSE;
 @interrupt void TIM2_UPD_OVF_IRQHandler(void)           //wil occur every 2 mili-seconds
  {
     TIM2->SR1 &= 0xFE;
-    
-    if(trigState == 1)
-    {
-        GPIO_WriteHigh(GPIOB, GPIO_PIN_4);
-        GPIO_WriteHigh(GPIOA, GPIO_PIN_3);
-        TIM2_Set(10);
-        trigState = 2;
-    }    
-    else
-    {
-        TIM2->CR1 = 0;
-        GPIO_WriteLow(GPIOB, GPIO_PIN_4);
-        GPIO_WriteLow(GPIOA, GPIO_PIN_3);
-        trigState = 0;
-    }
 }
 
 unsigned char brk = 0;
+unsigned char toggle = FALSE;
 @interrupt void TIM1_UPD_OVF_IRQ_Handler(void)    
 {
-   #if 0
-   if(brk)
-   {
-      brk = 0;
-      GPIO_WriteHigh(GPIOC, GPIO_PIN_1);
-   }
-   else
-   {
-      brk = 1;
-      GPIO_WriteLow(GPIOC, GPIO_PIN_1);
-   }
-   #else
-   stepping();
-   #endif
+    if(toggle == TRUE)
+    {
+        toggle = FALSE;
+        GPIO_WriteHigh(GPIOB, GPIO_PIN_7);
+        GPIO_WriteHigh(GPIOB, GPIO_PIN_6);
+    }
+    else
+    {
+        toggle = TRUE;
+        GPIO_WriteLow(GPIOB, GPIO_PIN_7);
+        GPIO_WriteHigh(GPIOB, GPIO_PIN_6);
+    }
+
    TIM1->SR1 &= 0xFE;
 }
 
@@ -83,20 +78,13 @@ unsigned long controlThread(void)
 
 @interrupt  void @svlreg  RemoteControl_IntHandler(void)
 {
-   if(GPIO_ReadInputPin(GPIOB, GPIO_PIN_0) == GPIO_PIN_0)
-   {
-      GPIO_WriteHigh(GPIOB, GPIO_PIN_6);
-   }
-   else
-   {
-      GPIO_WriteLow(GPIOB, GPIO_PIN_6);
-   }
+   interruptFunction();
 }
 
-
+unsigned char keypress = 0;
 @interrupt void @svlreg Key_IntHandler(void)
 {
-
+    keypress++;
 }
 
 

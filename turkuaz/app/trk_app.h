@@ -9,8 +9,8 @@ typedef struct
 
 extern dataSaveStruct levelRegister;
 
-typedef void (*trk_KeyCallbackFunct)(unsigned char, unsigned char, unsigned char);
-extern void trk_KeyCallback(unsigned char Key, unsigned char Pressed, unsigned char KeySource);
+typedef void (*trk_KeyCallbackFunct)(unsigned char, unsigned char);
+extern void trk_KeyCallback(unsigned char Key, unsigned char Pressed);
 extern void trk_appInit(void);
 extern unsigned char trk_GetSoftStartState(void);
 extern unsigned char trk_SetSoftStartState(unsigned char state);

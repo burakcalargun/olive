@@ -11,7 +11,6 @@
 #include "trk_app.h"
 
 unsigned char ata_TimerFlag;
-unsigned char ata_Let_ZeroCrossHandle  = FALSE;
 
 void WatchdogKick(void)
 {
@@ -33,25 +32,12 @@ void ata_WatchdogInit(void)
    trk_PushMessage(&ata_KickWatchdogThread, msg_ProcessAfter1ms*5);
 }
 
-unsigned long ata_ZC_Control_Thread(void)
-{
-   ata_Let_ZeroCrossHandle = TRUE;
-   return msg_ProcessStopped;
-}
-
-unsigned char ata_Get_ZC_Handle(void)
-{
-   return ata_Let_ZeroCrossHandle;
-}
-
 void ata_Init(void)
 {
-   /* Hardware Initializations*/
    ata_StartTimer4();
    ata_SetInterruptStatus(EnableAllInterrupts);
-   ata_WatchdogInit();
+   //ata_WatchdogInit();
    ata_KeyInit();
-   trk_PushMessage(&ata_ZC_Control_Thread, msg_ProcessAfter1s);
 }
 
 void ata_1mstimer(void)

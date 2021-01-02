@@ -21,7 +21,7 @@ void IWDG_Settings(void)
 
 void InitRegisters(void)
 {
-   CLK->CKDIVR = 0x00;                
+   CLK->CKDIVR = 0x01;                
    
    Init_GPIO();
    disableInterrupts();
@@ -82,8 +82,13 @@ void Init_GPIO(void)
    
    //GPIO_Init(GPIOB, GPIO_PIN_0, GPIO_MODE_IN_FL_IT);
 
+   
+    EXTI_DeInit();
+    GPIO_Init(GPIOC, GPIO_PIN_7, GPIO_MODE_IN_PU_IT);           // 
+
+    EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOC , EXTI_SENSITIVITY_FALL_ONLY);
+
     
-   EXTI_DeInit();
    //EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOB, EXTI_SENSITIVITY_RISE_FALL);
 #endif
 }
@@ -125,19 +130,5 @@ void TIM2_Settings(void)
 
 //####################################################################
 
-
-
-
-void TIM1_Set(unsigned short ms)
-{
-   TIM1->IER |= TIM1_IER_UIE;              //UIE = 0 update interrupt disable
-   TIM1->PSCRH = 0x00;
-   TIM1->PSCRL = 0x05;                     
-   TIM1->ARRH =  0x00;
-   TIM1->ARRL =  0xFF;                            
-   TIM1->CCR2H = 0x00;
-   TIM1->CCR2L = 0x00;                        
-   TIM1->CR1 = 0x05;  
-}
 
 

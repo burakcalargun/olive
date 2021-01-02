@@ -79,8 +79,6 @@ extern void TIM2_Set(unsigned short ms);
 
 extern void TIM2_Settings(void);
 
-extern void TIM1_Set(unsigned short ms);
-
 extern void TIM1_Settings(void);
 
 /* --------------------------------------------------------------------------*/
